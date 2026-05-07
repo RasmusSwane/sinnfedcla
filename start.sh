@@ -424,8 +424,23 @@ if [ "$FULL_CONFIG_MODE" = "true" ]; then
 fi
 
 # ── Enable Gateway Preload Fixes ──
-# This preload script keeps iframe embedding working on HF Spaces.
-export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--require /home/node/app/iframe-fix.cjs"
+# Keep DNS stable in HF Spaces when runtime networking prefers unreachable IPv6.
+export NODE_DNS_RESULT_ORDER="${NODE_DNS_RESULT_ORDER:-ipv4first}"
+
+# Ensure required preload scripts are present in NODE_OPTIONS, even if users
+# override NODE_OPTIONS in HF Space variables.
+append_node_require() {
+  local require_path="$1"
+  [ -f "$require_path" ] || return 0
+  case " $NODE_OPTIONS " in
+    *" --require $require_path "*) ;;
+    *) NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--require $require_path" ;;
+  esac
+}
+
+append_node_require "/opt/dns-fix.js"
+append_node_require "/home/node/app/iframe-fix.cjs"
+export NODE_OPTIONS
 
 # ── Patch OpenClaw scope-clearing bug for headless HF auth ──
 # OpenClaw can clear requested operator scopes after allowing a token-auth
