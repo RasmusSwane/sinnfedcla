@@ -68,7 +68,7 @@ function dohResolve(hostname, callback) {
             return callback(new Error(`DoH: no valid A record for ${hostname}`));
           }
           const ttl = Math.max((aRecords[0].TTL || 300) * 1000, 60000);
-          runtimeCache.set(hostname, { ips, expiry: Date.now() + ttl, cursor: 1 % ips.length });
+          runtimeCache.set(hostname, { ips, expiry: Date.now() + ttl, cursor: ips.length > 1 ? 1 : 0 });
           callback(null, ips[0]);
         } catch (e) {
           callback(new Error(`DoH parse error: ${e.message}`));
