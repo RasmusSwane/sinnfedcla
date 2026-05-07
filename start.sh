@@ -430,11 +430,11 @@ export NODE_DNS_RESULT_ORDER="${NODE_DNS_RESULT_ORDER:-ipv4first}"
 # Ensure required preload scripts are present in NODE_OPTIONS, even if users
 # override NODE_OPTIONS in HF Space variables.
 append_node_require() {
-  local preload_path="$1"
-  [ -f "$preload_path" ] || return 0
+  local require_path="$1"
+  [ -f "$require_path" ] || return 0
   case " $NODE_OPTIONS " in
-    *" --require $preload_path "*) ;;
-    *) NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--require $preload_path" ;;
+    *" --require $require_path "*) ;;
+    *) NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--require $require_path" ;;
   esac
 }
 
