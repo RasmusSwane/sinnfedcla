@@ -377,6 +377,9 @@ if [ -n "$TELEGRAM_BOT_TOKEN" ]; then
   export OPENCLAW_TELEGRAM_DNS_RESULT_ORDER=ipv4first
   export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--dns-result-order=ipv4first"
 
+  # Disable native Telegram command sync to avoid extra startup API calls
+  # (setMyCommands/deleteMyCommands) on flaky HF egress paths.
+  # Retry jitter of 0.2 means ±20% randomization to spread retry bursts.
   CONFIG_JSON=$(echo "$CONFIG_JSON" | jq --arg token "$CLEAN_TG_TOKEN" --arg proxy_url "${CLOUDFLARE_PROXY_URL:-}" '
     .channels.telegram.enabled = true
     | .channels.telegram.botToken = $token
