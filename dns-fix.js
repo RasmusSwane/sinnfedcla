@@ -15,14 +15,36 @@ const dns = require("dns");
 const https = require("https");
 
 // In-memory cache for runtime DoH resolutions
-const runtimeCache = new Map(); // hostname -> { ip, expiry }
+const runtimeCache = new Map(); // hostname -> { ips, expiry, cursor }
+
+// HF Spaces can prefer IPv6 addresses that are not reachable from the runtime.
+// Prefer IPv4 first unless callers explicitly request another family.
+try {
+  dns.setDefaultResultOrder("ipv4first");
+  console.log("[dns-fix] Enabled ipv4first DNS result ordering");
+} catch (_) {
+  // No-op on older Node versions where this API is unavailable.
+}
+
+const FORCE_IPV4_HOSTS = new Set(["api.telegram.org"]);
+
+function nextCachedIp(hostname) {
+  const cached = runtimeCache.get(hostname);
+  if (!cached || cached.expiry <= Date.now() || !Array.isArray(cached.ips) || cached.ips.length === 0) {
+    return null;
+  }
+  const index = cached.cursor % cached.ips.length;
+  const ip = cached.ips[index];
+  cached.cursor = (index + 1) % cached.ips.length;
+  return ip;
+}
 
 // DNS-over-HTTPS resolver
 function dohResolve(hostname, callback) {
   // Check runtime cache
-  const cached = runtimeCache.get(hostname);
-  if (cached && cached.expiry > Date.now()) {
-    return callback(null, cached.ip);
+  const cachedIp = nextCachedIp(hostname);
+  if (cachedIp) {
+    return callback(null, cachedIp);
   }
 
   const url = `https://1.1.1.1/dns-query?name=${encodeURIComponent(hostname)}&type=A`;
@@ -39,10 +61,13 @@ function dohResolve(hostname, callback) {
           if (aRecords.length === 0) {
             return callback(new Error(`DoH: no A record for ${hostname}`));
           }
-          const ip = aRecords[0].data;
+          const ips = [...new Set(aRecords.map((record) => record.data).filter(Boolean))];
+          if (ips.length === 0) {
+            return callback(new Error(`DoH: no valid A record for ${hostname}`));
+          }
           const ttl = Math.max((aRecords[0].TTL || 300) * 1000, 60000);
-          runtimeCache.set(hostname, { ip, expiry: Date.now() + ttl });
-          callback(null, ip);
+          runtimeCache.set(hostname, { ips, expiry: Date.now() + ttl, cursor: 1 % ips.length });
+          callback(null, ips[0]);
         } catch (e) {
           callback(new Error(`DoH parse error: ${e.message}`));
         }
@@ -69,6 +94,7 @@ dns.lookup = function patchedLookup(hostname, options, callback) {
     options = { family: options };
   }
   options = options || {};
+  const lookupOptions = { ...options };
 
   // Skip patching for localhost, IPs, and internal domains
   if (
@@ -80,11 +106,15 @@ dns.lookup = function patchedLookup(hostname, options, callback) {
     /^\d+\.\d+\.\d+\.\d+$/.test(hostname) ||
     /^::/.test(hostname)
   ) {
-    return origLookup.call(dns, hostname, options, callback);
+    return origLookup.call(dns, hostname, lookupOptions, callback);
+  }
+
+  if (!lookupOptions.family && FORCE_IPV4_HOSTS.has(hostname)) {
+    lookupOptions.family = 4;
   }
 
   // 1) Try system DNS first
-  origLookup.call(dns, hostname, options, (err, address, family) => {
+  origLookup.call(dns, hostname, lookupOptions, (err, address, family) => {
     if (!err && address) {
       return callback(null, address, family);
     }
