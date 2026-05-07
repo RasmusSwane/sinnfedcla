@@ -191,30 +191,42 @@ fi
 
 # ── Auto-create + Restore workspace from HF Dataset ──
 if [ -n "$HF_USERNAME" ] && [ -n "$HF_TOKEN" ]; then
-  BACKUP_DATASET="${BACKUP_DATASET_NAME:-huggingclaw-backup}"
-  BACKUP_URL="https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/datasets/${HF_USERNAME}/${BACKUP_DATASET}"
+  BACKUP_DATASET_INPUT="${BACKUP_DATASET_NAME:-huggingclaw-backup}"
+  if printf '%s' "$BACKUP_DATASET_INPUT" | grep -q '/'; then
+    BACKUP_OWNER="${BACKUP_DATASET_INPUT%%/*}"
+    BACKUP_DATASET="${BACKUP_DATASET_INPUT#*/}"
+  else
+    BACKUP_OWNER="$HF_USERNAME"
+    BACKUP_DATASET="$BACKUP_DATASET_INPUT"
+  fi
+  BACKUP_REPO="${BACKUP_OWNER}/${BACKUP_DATASET}"
+  BACKUP_URL="https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/datasets/${BACKUP_REPO}"
   
   # Auto-create the dataset if it doesn't exist
-  echo "📦 Checking HF Dataset: ${HF_USERNAME}/${BACKUP_DATASET}..."
+  echo "📦 Checking HF Dataset: ${BACKUP_REPO}..."
   DATASET_CHECK=$(curl -s -o /dev/null -w "%{http_code}" \
     -H "Authorization: Bearer $HF_TOKEN" \
-    "https://huggingface.co/api/datasets/${HF_USERNAME}/${BACKUP_DATASET}" \
+    "https://huggingface.co/api/datasets/${BACKUP_REPO}" \
     --max-time 10 2>/dev/null || echo "000")
   
   if [ "$DATASET_CHECK" = "404" ]; then
-    echo "  📝 Dataset not found, creating ${HF_USERNAME}/${BACKUP_DATASET}..."
-    CREATE_RESULT=$(curl -s -w "\n%{http_code}" \
-      -X POST "https://huggingface.co/api/repos/create" \
-      -H "Authorization: Bearer $HF_TOKEN" \
-      -H "Content-Type: application/json" \
-      -d "{\"type\":\"dataset\",\"name\":\"${BACKUP_DATASET}\",\"private\":true}" \
-      --max-time 15 2>/dev/null || echo "error")
-    CREATE_STATUS=$(echo "$CREATE_RESULT" | tail -1)
-    if [ "$CREATE_STATUS" = "200" ] || [ "$CREATE_STATUS" = "201" ]; then
-      echo "  ✅ Dataset created: ${HF_USERNAME}/${BACKUP_DATASET} (private)"
+    if [ "$BACKUP_OWNER" != "$HF_USERNAME" ]; then
+      echo "  ⚠️  Dataset not found at ${BACKUP_REPO} and auto-create is only supported for ${HF_USERNAME}/*"
     else
-      echo "  ⚠️  Could not create dataset (HTTP $CREATE_STATUS). Create it manually:"
-      echo "     https://huggingface.co/datasets/create"
+      echo "  📝 Dataset not found, creating ${BACKUP_REPO}..."
+      CREATE_RESULT=$(curl -s -w "\n%{http_code}" \
+        -X POST "https://huggingface.co/api/repos/create" \
+        -H "Authorization: Bearer $HF_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "{\"type\":\"dataset\",\"name\":\"${BACKUP_DATASET}\",\"private\":true}" \
+        --max-time 15 2>/dev/null || echo "error")
+      CREATE_STATUS=$(echo "$CREATE_RESULT" | tail -1)
+      if [ "$CREATE_STATUS" = "200" ] || [ "$CREATE_STATUS" = "201" ]; then
+        echo "  ✅ Dataset created: ${BACKUP_REPO} (private)"
+      else
+        echo "  ⚠️  Could not create dataset (HTTP $CREATE_STATUS). Create it manually:"
+        echo "     https://huggingface.co/datasets/create"
+      fi
     fi
   elif [ "$DATASET_CHECK" = "200" ]; then
     echo "  ✅ Dataset exists"
@@ -252,13 +264,17 @@ STATE_BACKUP_ROOT="/home/node/.openclaw/workspace/.huggingclaw-state/openclaw"
 if [ -d "$STATE_BACKUP_ROOT" ]; then
   echo "🧠 Restoring OpenClaw state..."
   for source_path in "$STATE_BACKUP_ROOT"/*; do
-    [ -e "$source_path" ] || continue
+    [ -e "$source_path" ] || [ -L "$source_path" ] || continue
     name="$(basename "$source_path")"
     target_path="/home/node/.openclaw/${name}"
 
     rm -rf "$target_path"
     mkdir -p "$(dirname "$target_path")"
-    cp -R "$source_path" "$target_path"
+    if [ -L "$source_path" ]; then
+      ln -s "$(readlink "$source_path")" "$target_path"
+    else
+      cp -R "$source_path" "$target_path"
+    fi
   done
   echo "  ✅ OpenClaw state restored"
 fi
@@ -367,7 +383,16 @@ if [ -n "$ALLOWED_ORIGINS" ]; then
   CONFIG_JSON=$(echo "$CONFIG_JSON" | jq ".gateway.controlUi.allowedOrigins = $ORIGINS_JSON")
 fi
 
+# WhatsApp (optional)
+if [ "$WHATSAPP_ENABLED_NORMALIZED" = "true" ]; then
+  CONFIG_JSON=$(echo "$CONFIG_JSON" | jq '.plugins.entries.whatsapp = {"enabled": true}')
+  CONFIG_JSON=$(echo "$CONFIG_JSON" | jq '.channels.whatsapp = {"dmPolicy": "pairing"}')
+fi
+fi
+
 # Telegram (supports multiple user IDs, comma-separated)
+# Keep this outside minimal/full-config branching so network hardening applies
+# consistently even when Telegram is provided via OPENCLAW_JSON.
 if [ -n "$TELEGRAM_BOT_TOKEN" ]; then
   CONFIG_JSON=$(echo "$CONFIG_JSON" | jq '.plugins.entries.telegram = {"enabled": true}')
   CLEAN_TG_TOKEN=$(echo "$TELEGRAM_BOT_TOKEN" | tr -d '[:space:]')
@@ -406,13 +431,6 @@ if [ -n "$TELEGRAM_BOT_TOKEN" ]; then
     # Single user (backward compatible)
     CONFIG_JSON=$(echo "$CONFIG_JSON" | jq --arg user_id "$TELEGRAM_USER_ID" '.channels.telegram += {"dmPolicy": "allowlist", "allowFrom": [$user_id]}')
   fi
-fi
-
-# WhatsApp (optional)
-if [ "$WHATSAPP_ENABLED_NORMALIZED" = "true" ]; then
-  CONFIG_JSON=$(echo "$CONFIG_JSON" | jq '.plugins.entries.whatsapp = {"enabled": true}')
-  CONFIG_JSON=$(echo "$CONFIG_JSON" | jq '.channels.whatsapp = {"dmPolicy": "pairing"}')
-fi
 fi
 
 # Write config
@@ -533,7 +551,13 @@ else
 printf "  │  %-40s │\n" "Browser: ❌ unavailable"
 fi
 if [ -n "$HF_USERNAME" ] && [ -n "$HF_TOKEN" ]; then
-printf "  │  %-40s │\n" "Backup: ✅ ${HF_USERNAME}/${BACKUP_DATASET:-huggingclaw-backup}"
+  SUMMARY_BACKUP_DATASET="${BACKUP_DATASET_NAME:-huggingclaw-backup}"
+  if printf '%s' "$SUMMARY_BACKUP_DATASET" | grep -q '/'; then
+    SUMMARY_BACKUP_REPO="$SUMMARY_BACKUP_DATASET"
+  else
+    SUMMARY_BACKUP_REPO="${HF_USERNAME}/${SUMMARY_BACKUP_DATASET}"
+  fi
+printf "  │  %-40s │\n" "Backup: ✅ ${SUMMARY_BACKUP_REPO}"
 else
 printf "  │  %-40s │\n" "Backup: ❌ not configured"
 fi
