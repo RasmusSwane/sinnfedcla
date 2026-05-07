@@ -34,7 +34,11 @@ INTERVAL = int(os.environ.get("SYNC_INTERVAL", "180"))
 INITIAL_DELAY = int(os.environ.get("SYNC_START_DELAY", "10"))
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
 HF_USERNAME = os.environ.get("HF_USERNAME", "")
-BACKUP_DATASET = os.environ.get("BACKUP_DATASET_NAME", "huggingclaw-backup")
+BACKUP_DATASET_INPUT = os.environ.get("BACKUP_DATASET_NAME", "huggingclaw-backup").strip().strip("/")
+if "/" in BACKUP_DATASET_INPUT:
+    BACKUP_REPO_ID = BACKUP_DATASET_INPUT
+else:
+    BACKUP_REPO_ID = f"{HF_USERNAME}/{BACKUP_DATASET_INPUT}" if HF_USERNAME else ""
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
 WHATSAPP_ENABLED = os.environ.get("WHATSAPP_ENABLED", "").strip().lower() == "true"
 
@@ -73,8 +77,10 @@ def snapshot_state_into_workspace() -> None:
                 continue
 
             backup_path = OPENCLAW_STATE_BACKUP_DIR / source_path.name
-            if source_path.is_dir():
-                shutil.copytree(source_path, backup_path)
+            if source_path.is_symlink():
+                backup_path.symlink_to(os.readlink(source_path))
+            elif source_path.is_dir():
+                shutil.copytree(source_path, backup_path, symlinks=True)
             elif source_path.is_file():
                 shutil.copy2(source_path, backup_path)
     except Exception as e:
@@ -160,7 +166,7 @@ def sync_with_hf_hub():
         from huggingface_hub import HfApi, upload_folder
 
         api = HfApi(token=HF_TOKEN)
-        repo_id = f"{HF_USERNAME}/{BACKUP_DATASET}"
+        repo_id = BACKUP_REPO_ID
 
         # Ensure dataset exists
         try:
@@ -260,7 +266,7 @@ def main():
             print("📁 Workspace sync: workspace not found, exiting.")
             return
 
-        use_hf_hub = bool(HF_TOKEN and HF_USERNAME)
+        use_hf_hub = bool(HF_TOKEN and BACKUP_REPO_ID)
         git_dir = WORKSPACE / ".git"
 
         if not use_hf_hub and not git_dir.exists():
@@ -303,7 +309,7 @@ def main():
         print("📁 Workspace sync: workspace not found, exiting.")
         return
 
-    use_hf_hub = bool(HF_TOKEN and HF_USERNAME)
+    use_hf_hub = bool(HF_TOKEN and BACKUP_REPO_ID)
     git_dir = WORKSPACE / ".git"
 
     if not use_hf_hub and not git_dir.exists():
@@ -320,7 +326,7 @@ def main():
     time.sleep(INITIAL_DELAY)
 
     if use_hf_hub:
-        print(f"🔄 Workspace sync started (huggingface_hub): every {INTERVAL}s → {HF_USERNAME}/{BACKUP_DATASET}")
+        print(f"🔄 Workspace sync started (huggingface_hub): every {INTERVAL}s → {BACKUP_REPO_ID}")
     else:
         print(f"🔄 Workspace sync started (git): every {INTERVAL}s")
 
