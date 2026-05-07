@@ -26,6 +26,8 @@ try {
   // No-op on older Node versions where this API is unavailable.
 }
 
+// HF Spaces frequently resolves Telegram API hostnames to unreachable IPv6
+// routes. Pinning this hostname to IPv4 avoids repeated connect timeouts.
 const FORCE_IPV4_HOSTS = new Set(["api.telegram.org"]);
 
 function nextCachedIp(hostname) {
@@ -35,7 +37,7 @@ function nextCachedIp(hostname) {
   }
   const index = cached.cursor % cached.ips.length;
   const ip = cached.ips[index];
-  cached.cursor = (index + 1) % cached.ips.length;
+  cached.cursor = (cached.cursor + 1) % cached.ips.length;
   return ip;
 }
 
@@ -66,8 +68,8 @@ function dohResolve(hostname, callback) {
             return callback(new Error(`DoH: no valid A record for ${hostname}`));
           }
           const ttl = Math.max((aRecords[0].TTL || 300) * 1000, 60000);
-          runtimeCache.set(hostname, { ips, expiry: Date.now() + ttl, cursor: 0 });
-          callback(null, nextCachedIp(hostname) || ips[0]);
+          runtimeCache.set(hostname, { ips, expiry: Date.now() + ttl, cursor: 1 % ips.length });
+          callback(null, ips[0]);
         } catch (e) {
           callback(new Error(`DoH parse error: ${e.message}`));
         }
