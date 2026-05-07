@@ -370,15 +370,38 @@ fi
 # Telegram (supports multiple user IDs, comma-separated)
 if [ -n "$TELEGRAM_BOT_TOKEN" ]; then
   CONFIG_JSON=$(echo "$CONFIG_JSON" | jq '.plugins.entries.telegram = {"enabled": true}')
-  export TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN"
-  
-  if [ -n "$TELEGRAM_USER_IDS" ]; then
+  CLEAN_TG_TOKEN=$(echo "$TELEGRAM_BOT_TOKEN" | tr -d '[:space:]')
+  export TELEGRAM_BOT_TOKEN="$CLEAN_TG_TOKEN"
+
+  export OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY=1
+  export OPENCLAW_TELEGRAM_DNS_RESULT_ORDER=ipv4first
+  export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--dns-result-order=ipv4first"
+
+  CONFIG_JSON=$(echo "$CONFIG_JSON" | jq --arg token "$CLEAN_TG_TOKEN" --arg proxy_url "${CLOUDFLARE_PROXY_URL:-}" '
+    .channels.telegram.enabled = true
+    | .channels.telegram.botToken = $token
+    | .channels.telegram.commands.native = false
+    | .channels.telegram.timeoutSeconds = 60
+    | (if $proxy_url != "" then .channels.telegram.apiRoot = $proxy_url else .channels.telegram.apiRoot = "https://api.telegram.org" end)
+    | .channels.telegram.retry = {
+        "attempts": 5,
+        "minDelayMs": 800,
+        "maxDelayMs": 30000,
+        "jitter": 0.2
+      }
+  ')
+
+  if [ -n "${TELEGRAM_ALLOWED_USERS:-}" ]; then
+    # Convert comma-separated IDs to JSON array
+    IDS_JSON=$(echo "$TELEGRAM_ALLOWED_USERS" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | jq -R . | jq -s .)
+    CONFIG_JSON=$(echo "$CONFIG_JSON" | jq --argjson ids "$IDS_JSON" '.channels.telegram += {"dmPolicy": "allowlist", "allowFrom": $ids}')
+  elif [ -n "$TELEGRAM_USER_IDS" ]; then
     # Convert comma-separated IDs to JSON array
     IDS_JSON=$(echo "$TELEGRAM_USER_IDS" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | jq -R . | jq -s .)
-    CONFIG_JSON=$(echo "$CONFIG_JSON" | jq ".channels.telegram = {\"dmPolicy\": \"allowlist\", \"allowFrom\": $IDS_JSON}")
+    CONFIG_JSON=$(echo "$CONFIG_JSON" | jq --argjson ids "$IDS_JSON" '.channels.telegram += {"dmPolicy": "allowlist", "allowFrom": $ids}')
   elif [ -n "$TELEGRAM_USER_ID" ]; then
     # Single user (backward compatible)
-    CONFIG_JSON=$(echo "$CONFIG_JSON" | jq ".channels.telegram = {\"dmPolicy\": \"allowlist\", \"allowFrom\": [\"$TELEGRAM_USER_ID\"]}")
+    CONFIG_JSON=$(echo "$CONFIG_JSON" | jq --arg user_id "$TELEGRAM_USER_ID" '.channels.telegram += {"dmPolicy": "allowlist", "allowFrom": [$user_id]}')
   fi
 fi
 
