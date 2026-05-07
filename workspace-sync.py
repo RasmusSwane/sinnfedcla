@@ -78,7 +78,10 @@ def snapshot_state_into_workspace() -> None:
 
             backup_path = OPENCLAW_STATE_BACKUP_DIR / source_path.name
             if source_path.is_symlink():
-                backup_path.symlink_to(os.readlink(source_path))
+                link_target = os.readlink(source_path)
+                if not os.path.isabs(link_target):
+                    link_target = str((source_path.parent / link_target).resolve(strict=False))
+                backup_path.symlink_to(link_target)
             elif source_path.is_dir():
                 shutil.copytree(source_path, backup_path, symlinks=True)
             elif source_path.is_file():
